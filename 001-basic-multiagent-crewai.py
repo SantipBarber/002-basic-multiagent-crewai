@@ -2,6 +2,7 @@ import requests
 import os
 from dotenv import load_dotenv
 from bs4 import BeautifulSoup
+# Importaciones de Crew súper importantes
 from crewai import Agent, Task, Crew
 from langchain.tools import tool
 from langchain_openai import ChatOpenAI
