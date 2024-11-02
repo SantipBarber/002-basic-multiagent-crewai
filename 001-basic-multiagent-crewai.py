@@ -1,16 +1,37 @@
 import requests
+import datetime
+import sys
+from contextlib import redirect_stdout
 import os
 from dotenv import load_dotenv
 from bs4 import BeautifulSoup
-# Importaciones de Crew súper importantes
 from crewai import Agent, Task, Crew
 from langchain.tools import tool
 from langchain_openai import ChatOpenAI
+from langchain_groq import ChatGroq
 from langchain_community.tools.tavily_search import TavilySearchResults
 
 load_dotenv()
 
-llm = ChatOpenAI(model="gpt-4-turbo-preview")
+# llm = ChatOpenAI(model="gpt-4-turbo-preview")
+
+llm = ChatGroq(
+    api_key=os.getenv("GROQ_API_KEY"),
+    model_name="llama3-groq-70b-8192-tool-use-preview"
+)
+
+class Tee:
+    def __init__(self, *files):
+        self.files = files
+
+    def write(self, obj):
+        for file in self.files:
+            file.write(obj)
+            file.flush()  # Opcional: asegura que se escriba inmediatamente
+
+    def flush(self):
+        for file in self.files:
+            file.flush()
 
 @tool("process_search_tool", return_direct=False)
 def process_search_tool(url: str) -> str:
@@ -23,11 +44,16 @@ tools = [TavilySearchResults(max_results=1), process_search_tool]
 
 online_researcher = Agent(
     role="Online Researcher",
-    goal="Research the topic online",
-    backstory="""Your primary role is to function as an intelligent online research assistant, adept at scouring 
-    the internet for the latest and most relevant trending stories across various sectors like politics, technology, 
-    health, culture, and global events. You possess the capability to access a wide range of online news sources, 
-    blogs, and social media platforms to gather real-time information.""",
+    goal="Conduct focused and efficient online research",
+    backstory="""You are a precise and efficient research analyst who:
+    1. Focuses on finding the most recent and authoritative sources
+    2. Prioritizes official announcements and peer-reviewed research
+    3. Extracts only the most relevant information, avoiding redundancy
+    4. Validates information across multiple sources before reporting
+    5. Presents findings in clear, structured bullet points
+    
+    You never speculate or include unverified information. You limit your research to 3-4 
+    key sources and present only confirmed, significant developments.""",
     verbose=True,
     allow_delegation=True,
     tools=tools,
@@ -36,20 +62,20 @@ online_researcher = Agent(
 
 blog_manager = Agent(
     role="Blog Manager",
-    goal="Write the blog article",
-    backstory="""You are a Blog Manager. The role of a Blog Manager encompasses several critical responsibilities aimed at transforming initial drafts into polished, SEO-optimized blog articles that engage and grow an audience. Starting with drafts provided by online researchers, the Blog Manager must thoroughly understand the content, ensuring it aligns with the blog's tone, target audience, and thematic goals. Key responsibilities include:
-
-1. Content Enhancement: Elevate the draft's quality by improving clarity, flow, and engagement. This involves refining the narrative, adding compelling headers, and ensuring the article is reader-friendly and informative.
-
-2. SEO Optimization: Implement best practices for search engine optimization. This includes keyword research and integration, optimizing meta descriptions, and ensuring URL structures and heading tags enhance visibility in search engine results.
-
-3. Compliance and Best Practices: Ensure the content adheres to legal and ethical standards, including copyright laws and truth in advertising. The Blog Manager must also keep up with evolving SEO strategies and blogging trends to maintain and enhance content effectiveness.
-
-4. Editorial Oversight: Work closely with writers and contributors to maintain a consistent voice and quality across all blog posts. This may also involve managing a content calendar, scheduling posts for optimal engagement, and coordinating with marketing teams to support promotional activities.
-
-5. Analytics and Feedback Integration: Regularly review performance metrics to understand audience engagement and preferences. Use this data to refine future content and optimize overall blog strategy.
-
-In summary, the Blog Manager plays a pivotal role in bridging initial research and the final publication by enhancing content quality, ensuring SEO compatibility, and aligning with the strategic objectives of the blog. This position requires a blend of creative, technical, and analytical skills to successfully manage and grow the blog's presence online.""",
+    goal="Create concise, impactful blog content",
+    backstory="""You are a focused content strategist who:
+    1. Transforms complex research into clear, accessible content
+    2. Structures articles with a clear beginning, middle, and end
+    3. Prioritizes actionable insights over general information
+    4. Uses simple language to explain complex topics
+    5. Maintains strict article length limits
+    
+    You consistently produce articles that:
+    - Start with a strong hook
+    - Present 2-3 key points maximum
+    - End with clear takeaways
+    - Stay under 500 words total
+    - Include only the most relevant source links""",
     verbose=True,
     allow_delegation=True,
     tools=tools,
@@ -58,16 +84,17 @@ In summary, the Blog Manager plays a pivotal role in bridging initial research a
 
 social_media_manager = Agent(
     role="Social Media Manager",
-    goal="Write a tweet",
-    backstory="""You are a Social Media Manager. The role of a Social Media Manager, particularly for managing Twitter content, involves transforming research drafts into concise, engaging tweets that resonate with the audience and adhere to platform best practices. Upon receiving a draft from an online researcher, the Social Media Manager is tasked with several critical functions:
-
-1. Content Condensation: Distill the core message of the draft into a tweet, which typically allows for only 280 characters. This requires a sharp focus on brevity while maintaining the essence and impact of the message.
-
-2. Engagement Optimization: Craft tweets to maximize engagement. This includes the strategic use of compelling language, relevant hashtags, and timely topics that resonate with the target audience.
-
-3. Compliance and Best Practices: Ensure that the tweets follow Twitter’s guidelines and best practices, including the appropriate use of mentions, hashtags, and links. Also, adhere to ethical standards, avoiding misinformation and respecting copyright norms.
-
-In summary, the Social Media Manager's role is crucial in leveraging Twitter to disseminate information effectively, engage with followers, and build the brand’s presence online. This position combines creative communication skills with strategic planning and analysis to optimize social media impact.""",
+    goal="Create viral-worthy tweets",
+    backstory="""You are a social media expert who:
+    1. Identifies the single most compelling angle from content
+    2. Creates memorable, shareable messages
+    3. Uses maximum 2 relevant hashtags
+    4. Focuses on one key message per tweet
+    5. Optimizes engagement through question or call-to-action
+    
+    You never exceed 280 characters and always prioritize clarity 
+    over cleverness. Each tweet should stand alone without needing 
+    external context.""",
     verbose=True,
     allow_delegation=True,
     tools=tools,
@@ -76,60 +103,150 @@ In summary, the Social Media Manager's role is crucial in leveraging Twitter to 
 
 content_marketing_manager = Agent(
     role="Content Marketing Manager",
-    goal="Manage the Content Marketing Team",
-    backstory="""You are an excellent Content Marketing Manager. Your primary role is to supervise each publication from the 'blog manager' 
-    and the tweets written by the 'social media manager' and approve the work for publication. Examine the work and regulate violent language, abusive content and racist content.
+    goal="Ensure quality and consistency across all content",
+    backstory="""You are a detail-oriented content supervisor who:
+    1. Ensures factual accuracy and clarity
+    2. Maintains consistent tone across all formats
+    3. Verifies source attribution
+    4. Checks for conciseness and impact
+    5. Guarantees content alignment with objectives
     
-    Capabilities:
-
-    Editorial Review: Analyze the final drafts from the blog manager and the social media manager for style consistency, thematic alignment, and overall narrative flow.
-
-    Quality Assurance: Conduct detailed checks for grammatical accuracy, factual correctness, and adherence to journalistic standards in the news content, as well as creativity and effectiveness in the advertisements.
-
-    Feedback Loop: Provide constructive feedback to both the blog manager and social media manager, facilitating a collaborative environment for continuous improvement in content creation and presentation.""",
+    You focus on:
+    - Removing any redundant information
+    - Ensuring each piece serves its specific purpose
+    - Maintaining professional standards
+    - Verifying all claims have proper support""",
     verbose=True,
     allow_delegation=True,
     tools=tools,
     llm=llm
 )
 
+spanish_translator = Agent(
+    role="Spanish Translator",
+    goal="Provide accurate Spanish (Spain) translations while maintaining tone and context",
+    backstory="""You are an expert translator specialized in Spanish (Spain) localization who:
+    1. Maintains the original meaning and tone
+    2. Uses Spain-specific terminology and expressions
+    3. Adapts cultural references appropriately
+    4. Preserves formatting and structure
+    5. Ensures natural-sounding Spanish text
+    
+    You focus on:
+    - Using proper Spanish (Spain) idioms
+    - Maintaining technical accuracy
+    - Preserving source formatting
+    - Adapting hashtags appropriately""",
+    verbose=True,
+    allow_delegation=False,  # El traductor no necesita delegar
+    tools=tools,
+    llm=llm
+)
+
 task1 = Task(
-    description="""Write me a report on Agentic Behavior. After the research on Agentic Behavior,pass the 
-    findings to the blog manager to generate the final blog article. Once done, pass it to the social media 
-    manager to write a tweet on the subject.""",
-    expected_output="Report on Agentic Behavior",
+    description="""Research 3 key AI developments (last 3 months only):
+    1. One major technical breakthrough
+    2. One proven business application
+    3. One societal impact
+    
+    Rules:
+    - Use only top-tier sources (e.g., arXiv, company releases)
+    - 100 words max per finding
+    - Include source links
+    - Focus on verified results only""",
+    expected_output="3-point AI report with sources",
     agent=online_researcher
 )
 
 task2 = Task(
-    description="""Using the research findings of the news correspondent, write an article for the blog. 
-    The publication should contain links to sources stated by the online researcher. 
-    Your final answer MUST be the full blog post of at least 3 paragraphs.""",
-    expected_output="Blog Article",    
+    description="""Create a 3-paragraph blog post:
+    P1: Highlight top breakthrough (50 words)
+    P2: Explain real-world impact (100 words)
+    P3: Future implications (50 words)
+    
+    Rules:
+    - Start with the most impactful finding
+    - Include max 3 source links
+    - Use clear, non-technical language
+    - Focus on practical applications""",
+    expected_output="300-word blog post",
     agent=blog_manager
 )
 
 task3 = Task(
-    description="""Using the research findings of the news correspondent, write a tweet. Your final answer MUST be 
-    the full tweet.""",
-    expected_output="Tweet",
+    description="""Craft one tweet with:
+    - The single most important finding
+    - Two relevant #hashtags
+    - One clear call-to-action
+    
+    Rules:
+    - Max 280 characters
+    - Focus on business impact
+    - Make it shareable""",
+    expected_output="High-impact tweet",
     agent=social_media_manager
 )
 
+# Modificar task4 para incluir todos los outputs
 task4 = Task(
-    description="""To meticulously review and harmonize the final output from both the blog manager and social media manager, ensuring cohesion and excellence in the final publication. Once done, publish the final report.""",
-    expected_output="Final Report",
+    description="""Review and compile all outputs:
+    1. Include the original research findings (labeled as "RESEARCH FINDINGS:")
+    2. Include the blog post (labeled as "BLOG POST:")
+    3. Include the tweet (labeled as "TWEET:")
+    4. Add your quality verification (labeled as "QUALITY VERIFICATION:")
+    
+    Present everything in this order with clear separators and labels.""",
+    expected_output="Complete report with all outputs",
     agent=content_marketing_manager
 )
 
-agents = [online_researcher, blog_manager, social_media_manager, content_marketing_manager]
+# Añadir la tarea de traducción
+task5 = Task(
+    description="""Translate the complete report to Spanish (Spain):
+    
+    Rules:
+    - Maintain all section labels in Spanish (HALLAZGOS DE LA INVESTIGACIÓN:, ENTRADA DE BLOG:, TWEET:, VERIFICACIÓN DE CALIDAD:)
+    - Adapt hashtags appropriately
+    - Keep any URLs or technical terms as needed
+    - Use Spain-specific terminology
+    - Maintain the original formatting
+    
+    Present the translation with the same structure and clarity as the original.""",
+    expected_output="Complete report in Spanish (Spain)",
+    agent=spanish_translator
+)
+
+agents = [online_researcher, blog_manager, social_media_manager, content_marketing_manager, spanish_translator]
+tasks = [task1, task2, task3, task4, task5]
 
 crew = Crew(
     agents=agents,
-    tasks=[task1, task2, task3, task4],
+    tasks=tasks,
     verbose=2
 )
 
-result = crew.kickoff()
+def get_log_filename():
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    return f"crewai_log_{timestamp}.txt"
 
-print(result)
+log_filename = get_log_filename()
+print(f"Guardando log en: {log_filename}")
+
+with open(log_filename, 'w', encoding='utf-8') as log_file:
+    # Guardar la referencia original de stdout
+    original_stdout = sys.stdout
+    # Crear un Tee que escriba tanto a stdout como al archivo
+    sys.stdout = Tee(sys.stdout, log_file)
+    
+    try:
+        result = crew.kickoff()
+        print("\n=== RESULTADO FINAL ===")
+        print(result)
+    except Exception as e:
+        print("\n=== ERROR ===")
+        print(f"Error durante la ejecución: {str(e)}")
+    finally:
+        # Restaurar stdout original
+        sys.stdout = original_stdout
+
+print(f"\nLog guardado en: {log_filename}")
